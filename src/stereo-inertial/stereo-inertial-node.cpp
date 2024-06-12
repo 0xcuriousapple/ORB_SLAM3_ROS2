@@ -1,6 +1,8 @@
 #include "stereo-inertial-node.hpp"
 
 #include <opencv2/core/core.hpp>
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 using std::placeholders::_1;
 
@@ -8,6 +10,8 @@ StereoInertialNode::StereoInertialNode(ORB_SLAM3::System *SLAM, const string &st
     Node("ORB_SLAM3_ROS2"),
     SLAM_(SLAM)
 {
+    pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("camera_pose", 10);
+
     stringstream ss_rec(strDoRectify);
     ss_rec >> boolalpha >> doRectify_;
 
@@ -57,9 +61,9 @@ StereoInertialNode::StereoInertialNode(ORB_SLAM3::System *SLAM, const string &st
         cv::initUndistortRectifyMap(K_r, D_r, R_r, P_r.rowRange(0, 3).colRange(0, 3), cv::Size(cols_r, rows_r), CV_32F, M1r_, M2r_);
     }
 
-    subImu_ = this->create_subscription<ImuMsg>("imu", 1000, std::bind(&StereoInertialNode::GrabImu, this, _1));
-    subImgLeft_ = this->create_subscription<ImageMsg>("camera/left", 100, std::bind(&StereoInertialNode::GrabImageLeft, this, _1));
-    subImgRight_ = this->create_subscription<ImageMsg>("camera/right", 100, std::bind(&StereoInertialNode::GrabImageRight, this, _1));
+    subImu_ = this->create_subscription<ImuMsg>("/imu", 1000, std::bind(&StereoInertialNode::GrabImu, this, _1));
+    subImgLeft_ = this->create_subscription<ImageMsg>("/infra1/image_rect_raw", 100, std::bind(&StereoInertialNode::GrabImageLeft, this, _1));
+    subImgRight_ = this->create_subscription<ImageMsg>("/infra2/image_rect_raw", 100, std::bind(&StereoInertialNode::GrabImageRight, this, _1));
 
     syncThread_ = new std::thread(&StereoInertialNode::SyncWithImu, this);
 }
@@ -144,21 +148,21 @@ void StereoInertialNode::SyncWithImu()
             tImLeft = Utility::StampToSec(imgLeftBuf_.front()->header.stamp);
             tImRight = Utility::StampToSec(imgRightBuf_.front()->header.stamp);
 
-            bufMutexRight_.lock();
+            std::unique_lock<std::mutex> lockRight(bufMutexRight_);
             while ((tImLeft - tImRight) > maxTimeDiff && imgRightBuf_.size() > 1)
             {
                 imgRightBuf_.pop();
                 tImRight = Utility::StampToSec(imgRightBuf_.front()->header.stamp);
             }
-            bufMutexRight_.unlock();
+            lockRight.unlock();
 
-            bufMutexLeft_.lock();
+            std::unique_lock<std::mutex> lockLeft(bufMutexLeft_);
             while ((tImRight - tImLeft) > maxTimeDiff && imgLeftBuf_.size() > 1)
             {
                 imgLeftBuf_.pop();
                 tImLeft = Utility::StampToSec(imgLeftBuf_.front()->header.stamp);
             }
-            bufMutexLeft_.unlock();
+            lockLeft.unlock();
 
             if ((tImLeft - tImRight) > maxTimeDiff || (tImRight - tImLeft) > maxTimeDiff)
             {
@@ -168,18 +172,18 @@ void StereoInertialNode::SyncWithImu()
             if (tImLeft > Utility::StampToSec(imuBuf_.back()->header.stamp))
                 continue;
 
-            bufMutexLeft_.lock();
+            lockLeft.lock();
             imLeft = GetImage(imgLeftBuf_.front());
             imgLeftBuf_.pop();
-            bufMutexLeft_.unlock();
+            lockLeft.unlock();
 
-            bufMutexRight_.lock();
+            lockRight.lock();
             imRight = GetImage(imgRightBuf_.front());
             imgRightBuf_.pop();
-            bufMutexRight_.unlock();
+            lockRight.unlock();
 
             vector<ORB_SLAM3::IMU::Point> vImuMeas;
-            bufMutex_.lock();
+            std::unique_lock<std::mutex> lockImu(bufMutex_);
             if (!imuBuf_.empty())
             {
                 // Load imu measurements from buffer
@@ -193,7 +197,7 @@ void StereoInertialNode::SyncWithImu()
                     imuBuf_.pop();
                 }
             }
-            bufMutex_.unlock();
+            lockImu.unlock();
 
             if (bClahe_)
             {
@@ -207,7 +211,27 @@ void StereoInertialNode::SyncWithImu()
                 cv::remap(imRight, imRight, M1r_, M2r_, cv::INTER_LINEAR);
             }
 
-            SLAM_->TrackStereo(imLeft, imRight, tImLeft, vImuMeas);
+            // Track stereo and get the current pose
+            Sophus::SE3f currentPose = SLAM_->TrackStereo(imLeft, imRight, tImLeft, vImuMeas);
+
+            // Publish the current pose
+            geometry_msgs::msg::PoseStamped pose_msg;
+            pose_msg.header.stamp = this->now();
+            pose_msg.header.frame_id = "camera_frame";
+
+            // Set the pose data
+            Eigen::Vector3f translation = currentPose.translation();
+            Eigen::Quaternionf rotation(currentPose.unit_quaternion());
+
+            pose_msg.pose.position.x = translation.x();
+            pose_msg.pose.position.y = translation.y();
+            pose_msg.pose.position.z = translation.z();
+            pose_msg.pose.orientation.x = rotation.x();
+            pose_msg.pose.orientation.y = rotation.y();
+            pose_msg.pose.orientation.z = rotation.z();
+            pose_msg.pose.orientation.w = rotation.w();
+
+            pose_publisher_->publish(pose_msg);
 
             std::chrono::milliseconds tSleep(1);
             std::this_thread::sleep_for(tSleep);

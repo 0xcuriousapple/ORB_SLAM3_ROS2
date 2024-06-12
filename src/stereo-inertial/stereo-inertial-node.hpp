@@ -4,8 +4,11 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 #include <cv_bridge/cv_bridge.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include "System.h"
 #include "Frame.h"
@@ -30,7 +33,9 @@ private:
     cv::Mat GetImage(const ImageMsg::SharedPtr msg);
     void SyncWithImu();
 
-    rclcpp::Subscription<ImuMsg>::SharedPtr   subImu_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_publisher_;
+
+    rclcpp::Subscription<ImuMsg>::SharedPtr subImu_;
     rclcpp::Subscription<ImageMsg>::SharedPtr subImgLeft_;
     rclcpp::Subscription<ImageMsg>::SharedPtr subImgRight_;
 
@@ -38,11 +43,11 @@ private:
     std::thread *syncThread_;
 
     // IMU
-    queue<ImuMsg::SharedPtr> imuBuf_;
+    std::queue<ImuMsg::SharedPtr> imuBuf_;
     std::mutex bufMutex_;
 
     // Image
-    queue<ImageMsg::SharedPtr> imgLeftBuf_, imgRightBuf_;
+    std::queue<ImageMsg::SharedPtr> imgLeftBuf_, imgRightBuf_;
     std::mutex bufMutexLeft_, bufMutexRight_;
 
     bool doRectify_;
