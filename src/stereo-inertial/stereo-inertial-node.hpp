@@ -23,7 +23,7 @@ using ImageMsg = sensor_msgs::msg::Image;
 class StereoInertialNode : public rclcpp::Node
 {
 public:
-    StereoInertialNode(ORB_SLAM3::System* pSLAM, const string &strSettingsFile, const string &strDoRectify, const string &strDoEqual);
+    StereoInertialNode(ORB_SLAM3::System* pSLAM, const std::string &strSettingsFile, const std::string &strDoEqual, const std::string &camera_name);
     ~StereoInertialNode();
 
 private:
@@ -56,6 +56,8 @@ private:
 
     bool bClahe_;
     cv::Ptr<cv::CLAHE> clahe_ = cv::createCLAHE(3.0, cv::Size(8, 8));
+
+    std::string camera_name_; // Add this line
 };
 
 #endif

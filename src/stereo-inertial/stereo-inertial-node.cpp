@@ -3,67 +3,27 @@
 #include <opencv2/core/core.hpp>
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include <yaml-cpp/yaml.h>
 
 using std::placeholders::_1;
 
-StereoInertialNode::StereoInertialNode(ORB_SLAM3::System *SLAM, const string &strSettingsFile, const string &strDoRectify, const string &strDoEqual) :
-    Node("ORB_SLAM3_ROS2"),
-    SLAM_(SLAM)
+StereoInertialNode::StereoInertialNode(ORB_SLAM3::System *SLAM, const std::string &strSettingsFile, const std::string &strDoEqual, const std::string &camera_name) :
+    Node("ORB_SLAM3_ROS2_" + camera_name),
+    SLAM_(SLAM),
+    camera_name_(camera_name)
 {
-    pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("camera_pose", 10);
+    pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(camera_name + "/pose", 10);
 
-    stringstream ss_rec(strDoRectify);
-    ss_rec >> boolalpha >> doRectify_;
 
-    stringstream ss_eq(strDoEqual);
-    ss_eq >> boolalpha >> doEqual_;
+    std::stringstream ss_eq(strDoEqual);
+    ss_eq >> std::boolalpha >> doEqual_;
 
     bClahe_ = doEqual_;
-    std::cout << "Rectify: " << doRectify_ << std::endl;
     std::cout << "Equal: " << doEqual_ << std::endl;
 
-    if (doRectify_)
-    {
-        // Load settings related to stereo calibration
-        cv::FileStorage fsSettings(strSettingsFile, cv::FileStorage::READ);
-        if (!fsSettings.isOpened())
-        {
-            cerr << "ERROR: Wrong path to settings" << endl;
-            assert(0);
-        }
-
-        cv::Mat K_l, K_r, P_l, P_r, R_l, R_r, D_l, D_r;
-        fsSettings["LEFT.K"] >> K_l;
-        fsSettings["RIGHT.K"] >> K_r;
-
-        fsSettings["LEFT.P"] >> P_l;
-        fsSettings["RIGHT.P"] >> P_r;
-
-        fsSettings["LEFT.R"] >> R_l;
-        fsSettings["RIGHT.R"] >> R_r;
-
-        fsSettings["LEFT.D"] >> D_l;
-        fsSettings["RIGHT.D"] >> D_r;
-
-        int rows_l = fsSettings["LEFT.height"];
-        int cols_l = fsSettings["LEFT.width"];
-        int rows_r = fsSettings["RIGHT.height"];
-        int cols_r = fsSettings["RIGHT.width"];
-
-        if (K_l.empty() || K_r.empty() || P_l.empty() || P_r.empty() || R_l.empty() || R_r.empty() || D_l.empty() || D_r.empty() ||
-            rows_l == 0 || rows_r == 0 || cols_l == 0 || cols_r == 0)
-        {
-            cerr << "ERROR: Calibration parameters to rectify stereo are missing!" << endl;
-            assert(0);
-        }
-
-        cv::initUndistortRectifyMap(K_l, D_l, R_l, P_l.rowRange(0, 3).colRange(0, 3), cv::Size(cols_l, rows_l), CV_32F, M1l_, M2l_);
-        cv::initUndistortRectifyMap(K_r, D_r, R_r, P_r.rowRange(0, 3).colRange(0, 3), cv::Size(cols_r, rows_r), CV_32F, M1r_, M2r_);
-    }
-
-    subImu_ = this->create_subscription<ImuMsg>("/imu", 1000, std::bind(&StereoInertialNode::GrabImu, this, _1));
-    subImgLeft_ = this->create_subscription<ImageMsg>("/infra1/image_rect_raw", 100, std::bind(&StereoInertialNode::GrabImageLeft, this, _1));
-    subImgRight_ = this->create_subscription<ImageMsg>("/infra2/image_rect_raw", 100, std::bind(&StereoInertialNode::GrabImageRight, this, _1));
+    subImu_ = this->create_subscription<ImuMsg>(camera_name + "/imu", 1000, std::bind(&StereoInertialNode::GrabImu, this, _1));
+    subImgLeft_ = this->create_subscription<ImageMsg>(camera_name + "/infra1/image_rect_raw", 100, std::bind(&StereoInertialNode::GrabImageLeft, this, _1));
+    subImgRight_ = this->create_subscription<ImageMsg>(camera_name + "/infra2/image_rect_raw", 100, std::bind(&StereoInertialNode::GrabImageRight, this, _1));
 
     syncThread_ = new std::thread(&StereoInertialNode::SyncWithImu, this);
 }
@@ -205,11 +165,6 @@ void StereoInertialNode::SyncWithImu()
                 clahe_->apply(imRight, imRight);
             }
 
-            if (doRectify_)
-            {
-                cv::remap(imLeft, imLeft, M1l_, M2l_, cv::INTER_LINEAR);
-                cv::remap(imRight, imRight, M1r_, M2r_, cv::INTER_LINEAR);
-            }
 
             // Track stereo and get the current pose
             Sophus::SE3f currentPose = SLAM_->TrackStereo(imLeft, imRight, tImLeft, vImuMeas);

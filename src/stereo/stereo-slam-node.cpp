@@ -1,55 +1,21 @@
 #include "stereo-slam-node.hpp"
 
 #include<opencv2/core/core.hpp>
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 using std::placeholders::_1;
 using std::placeholders::_2;
 
-StereoSlamNode::StereoSlamNode(ORB_SLAM3::System* pSLAM, const string &strSettingsFile, const string &strDoRectify)
-:   Node("ORB_SLAM3_ROS2"),
-    m_SLAM(pSLAM)
+StereoSlamNode::StereoSlamNode(ORB_SLAM3::System* pSLAM, const string &strSettingsFile, const std::string &camera_name)
+:   Node("ORB_SLAM3_ROS2_" + camera_name),
+    m_SLAM(pSLAM),
+    camera_name_(camera_name)
 {
-    stringstream ss(strDoRectify);
-    ss >> boolalpha >> doRectify;
+    pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(camera_name + "/pose", 10);
 
-    if (doRectify){
-
-        cv::FileStorage fsSettings(strSettingsFile, cv::FileStorage::READ);
-        if(!fsSettings.isOpened()){
-            cerr << "ERROR: Wrong path to settings" << endl;
-            assert(0);
-        }
-
-        cv::Mat K_l, K_r, P_l, P_r, R_l, R_r, D_l, D_r;
-        fsSettings["LEFT.K"] >> K_l;
-        fsSettings["RIGHT.K"] >> K_r;
-
-        fsSettings["LEFT.P"] >> P_l;
-        fsSettings["RIGHT.P"] >> P_r;
-
-        fsSettings["LEFT.R"] >> R_l;
-        fsSettings["RIGHT.R"] >> R_r;
-
-        fsSettings["LEFT.D"] >> D_l;
-        fsSettings["RIGHT.D"] >> D_r;
-
-        int rows_l = fsSettings["LEFT.height"];
-        int cols_l = fsSettings["LEFT.width"];
-        int rows_r = fsSettings["RIGHT.height"];
-        int cols_r = fsSettings["RIGHT.width"];
-
-        if(K_l.empty() || K_r.empty() || P_l.empty() || P_r.empty() || R_l.empty() || R_r.empty() || D_l.empty() || D_r.empty() ||
-                rows_l==0 || rows_r==0 || cols_l==0 || cols_r==0){
-            cerr << "ERROR: Calibration parameters to rectify stereo are missing!" << endl;
-            assert(0);
-        }
-
-        cv::initUndistortRectifyMap(K_l,D_l,R_l,P_l.rowRange(0,3).colRange(0,3),cv::Size(cols_l,rows_l),CV_32F,M1l,M2l);
-        cv::initUndistortRectifyMap(K_r,D_r,R_r,P_r.rowRange(0,3).colRange(0,3),cv::Size(cols_r,rows_r),CV_32F,M1r,M2r);
-    }
-
-    left_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), "camera/left");
-    right_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), "camera/right");
+    left_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), camera_name + "/infra1/image_rect_raw");
+    right_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), camera_name + "/infra2/image_rect_raw");
 
     syncApproximate = std::make_shared<message_filters::Synchronizer<approximate_sync_policy> >(approximate_sync_policy(10), *left_sub, *right_sub);
     syncApproximate->registerCallback(&StereoSlamNode::GrabStereo, this);
@@ -87,15 +53,29 @@ void StereoSlamNode::GrabStereo(const ImageMsg::SharedPtr msgLeft, const ImageMs
         RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
         return;
     }
+    
+     Sophus::SE3f currentPose =  m_SLAM->TrackStereo(cv_ptrLeft->image, cv_ptrRight->image, Utility::StampToSec(msgLeft->header.stamp));
+    
+            // Publish the current pose
+            geometry_msgs::msg::PoseStamped pose_msg;
+            pose_msg.header.stamp = this->now();
+            pose_msg.header.frame_id = "camera_frame";
 
-    if (doRectify){
-        cv::Mat imLeft, imRight;
-        cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
-        cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        m_SLAM->TrackStereo(imLeft, imRight, Utility::StampToSec(msgLeft->header.stamp));
-    }
-    else
-    {
-        m_SLAM->TrackStereo(cv_ptrLeft->image, cv_ptrRight->image, Utility::StampToSec(msgLeft->header.stamp));
-    }
+            // Set the pose data
+            Eigen::Vector3f translation = currentPose.translation();
+            Eigen::Quaternionf rotation(currentPose.unit_quaternion());
+
+            pose_msg.pose.position.x = translation.x();
+            pose_msg.pose.position.y = translation.y();
+            pose_msg.pose.position.z = translation.z();
+            pose_msg.pose.orientation.x = rotation.x();
+            pose_msg.pose.orientation.y = rotation.y();
+            pose_msg.pose.orientation.z = rotation.z();
+            pose_msg.pose.orientation.w = rotation.w();
+
+            pose_publisher_->publish(pose_msg);
+
+            std::chrono::milliseconds tSleep(1);
+            std::this_thread::sleep_for(tSleep);
+    
 }
