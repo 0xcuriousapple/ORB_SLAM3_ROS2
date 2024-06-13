@@ -5,7 +5,7 @@ Refer to orginal for installation instructions
 ## System 
 1. ROS Foxy
 2. Ubuntu 20.04
-3. D435i
+3. D435i, D455
 
 ## Commands 
 ```bash
@@ -24,7 +24,8 @@ should publish topics with <camera_name>/
 ros2 run orbslam3 stereo-inertial orbslam3_ros2/vocabulary/ORBvoc.txt orbslam3_ros2/config/stereo-inertial/RealSense_D435i.yaml <camera_name>
 
 ### stereo (working fine)
-ros2 run orbslam3 stereo orbslam3_ros2/vocabulary/ORBvoc.txt orbslam3_ros2/config/stereo-inertial/RealSense_D435i.yaml <camera_name>
+ros2 run orbslam3 stereo orbslam3_ros2/vocabulary/ORBvoc.txt orbslam3_ros2/config/stereo/RealSense_D435i.yaml <camera_name>
+ros2 run orbslam3 stereo orbslam3_ros2/vocabulary/ORBvoc.txt orbslam3_ros2/config/stereo/RealSense_D455i.yaml <camera_name>
 
 ## build 
 cd ~/colcon_ws
